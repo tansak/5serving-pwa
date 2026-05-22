@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<meta name="theme-color" content="#060f08">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="5serving">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.json">
+<title>5serving — Daily Nutrition Tracker</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;700&family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#060f08;font-family:'Nunito',sans-serif;color:#f0ebe0;overscroll-behavior:none}
+input,button,textarea{font-family:inherit}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-thumb{background:#1a3d22;border-radius:99px}
+input[type=range]{-webkit-appearance:none;height:5px;border-radius:5px;background:#1a3d22;outline:none;width:100%;cursor:pointer}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:#d4841a;cursor:pointer;border:2px solid rgba(255,255,255,.2)}
+@keyframes pulse{0%,100%{opacity:.3;transform:scale(.8)}50%{opacity:1;transform:scale(1)}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.fade{animation:fadeIn .3s ease}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react,env">
+const {useState,useEffect,useRef}=React;
+
+/* ── CONFIG: Replace with your Supabase project values ── */
+const SUPABASE_URL = window.SUPABASE_URL || 'YOUR_SUPABASE_URL';
+const SUPABASE_ANON_KEY = window.SUPABASE_ANON_KEY || 'YOUR_SUPABASE_ANON_KEY';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+/* ── CONSTANTS ── */
+const G="#d4841a",BG="#060f08",CD="#0f2414",BD="#1a3d22",CR="#f0ebe0",SG="#5e9e70",MT="#3a7048",GR="212,132,26";
+const APASS="admin@5serving";
+const ra=(r,a)=>`rgba(${r},${a})`;
+const tk=()=>new Date().toISOString().split("T")[0];
+const uid=()=>Math.random().toString(36).slice(2,10)+Date.now().toString(36);
+const fmtDate=()=>new Date().toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"long"});
+const card=(x={})=>({background:CD,border:`1px solid ${BD}`,borderRadius:14,...x});
+
+/* ── STORAGE LAYER (Supabase + localStorage fallback) ── */
+const db={
+  async getUser(id){
+    try{const{data}=await sb.from('users').select('*').eq('id',id).single();return data;}
+    catch{return JSON.parse(localStorage.getItem('user_'+id)||'null');}
+  },
+  async saveUser(u){
+    try{await sb.from('users').upsert(u);}
+    catch{}
+    localStorage.setItem('user_'+u.id,JSON.stringify(u));
+  },
+  async getChecks(userId,date){
+    try{const{data}=await sb.from('daily_checks').select('checks').eq('user_id',userId).eq('date',date).single();return data?.checks||{};}
+    catch{return JSON.parse(localStorage.getItem(`checks_${userId}_${date}`)||'{}');}
+  },
+  async saveChecks(userId,date,checks){
+    try{await sb.from('daily_checks').upsert({user_id:userId,date,checks});}
+    catch{}
+    localStorage.setItem(`checks_${userId}_${date}`,JSON.stringify(checks));
+  },
+  async getHistory(userId){
+    try{const{data}=await sb.from('daily_checks').select('date,checks').eq('user_id',userId);
+      if(data){const h={};data.forEach(r=>{h[r.date]=r.checks;});return h;}
+    }catch{}
+    return JSON.parse(localStorage.getItem('history_'+userId)||'{}');
+  },
+  async getHealthEntries(userId){
+    try{const{data}=await sb.from('health_entries').select('*').eq('user_id',userId).order('date',{ascending:false}).limit(30);return data||[];}
+    catch{return JSON.parse(localStorage.getItem('health_'+userId)||'[]');}
+  },
+  async saveHealthEntry(userId,entry){
+    try{await sb.from('health_entries').upsert({user_id:userId,...entry});}
+    catch{}
+    const existing=JSON.parse(localStorage.getItem('health_'+userId)||'[]');
+    const upd=[entry,...existing.filter(e=>e.date!==entry.date)].slice(0,30);
+    localStorage.setItem('health_'+userId,JSON.stringify(upd));
+    return upd;
+  },
+  async getAllUsers(){
+    try{const{data}=await sb.from('users').select('*').order('joined_at',{ascending:false});return data||[];}
+    catch{return[];}
+  },
+  async getLatestHealth(userId){
+    try{const{data}=await sb.from('health_entries').select('*').eq('user_id',userId).order('date',{ascending:false}).limit(1).single();return data;}
+    catch{return null;}
+  },
+};
+
+/* ── DATA ── */
+const WINDOWS=[
+  {id:1,e:"☀️",n:"Morning Boost",t:"6:00 AM",nu:"Vitamin C + Iron",food:"Amla / lemon in warm water + seasonal fruit",why:"Floods Vitamin C and activates iron absorption for the entire day.",c:"#f59e0b",rgb:"245,158,11",ph:1,
+   recipes:["Chew 1 raw amla → 1 glass warm water","1 tsp amla powder + honey in warm water","Half lemon + warm water + pinch of turmeric"],
+   items:["Banana","Papaya","Guava","Mango"]},
+  {id:2,e:"🌿",n:"Green Power",t:"10:30 AM",nu:"Iron + Folate + Calcium",food:"Moringa / Spinach / leafy green",why:"Covers the triple deficiency most Indians have — Iron, Calcium, Folate.",c:"#22c55e",rgb:"34,197,94",ph:1,
+   recipes:["Moringa + coconut + chilli chutney","Spinach added to dal while cooking","Sauté Moringa with garlic + mustard seeds"],
+   items:["Moringa","Spinach","Methi","Drumstick"]},
+  {id:3,e:"🥗",n:"Rainbow Salad",t:"1:00 PM",nu:"Calcium + Magnesium + Vit A",food:"Grated carrot + beetroot + beans",why:"Eat BEFORE your meal — primes digestion and fills you faster.",c:"#f87171",rgb:"248,113,113",ph:3,
+   recipes:["Grate carrot + beetroot + lemon + cumin","Add sesame seeds for calcium boost","Sprouted moong on top"],
+   items:["Carrot","Beetroot","Sesame","Sprouts"]},
+  {id:4,e:"🍎",n:"Afternoon Fruit",t:"4:00 PM",nu:"Potassium + Antioxidants",food:"1–2 seasonal fruits or raw veggies + chutney",why:"Prevents 4 PM crash. Replace every packaged snack with this.",c:"#fb923c",rgb:"251,146,60",ph:2,
+   recipes:["2 bananas or 1 guava — zero prep","Cucumber + carrot + groundnut chutney","Coconut water + fruit"],
+   items:["Banana","Guava","Pomegranate","Watermelon"]},
+  {id:5,e:"🫘",n:"Dinner Greens",t:"7:30 PM",nu:"Zinc + B-Vits + Gut Health",food:"Methi / Curry leaves in dal + raw onion + garlic",why:"Raw onion + garlic are prebiotics — feed good gut bacteria overnight.",c:"#c084fc",rgb:"192,132,252",ph:3,
+   recipes:["Methi into dal (last 5 min)","Amaranth into any sabzi","Curry leaves tadka on curd rice"],
+   items:["Methi","Amaranth","Curry leaves","Palak"]},
+];
+const PHASES=[
+  {id:1,n:"Foundation",     wks:"Wks 1–4",  a:[1,2],       c:"#f59e0b",rgb:"245,158,11", f:"Build your morning nutrition ritual",     m:"By Wk 4, Windows 1 & 2 feel automatic."},
+  {id:2,n:"Building",       wks:"Wks 5–8",  a:[1,2,4],     c:"#22c55e",rgb:"34,197,94",  f:"Add the afternoon fruit habit",            m:"4 PM crash disappears. Skin glow noticeable."},
+  {id:3,n:"Full 5 Servings",wks:"Wks 9–12", a:[1,2,3,4,5], c:"#f87171",rgb:"248,113,113",f:"Complete the daily 5-window cycle",         m:"All 5 windows feel automatic. This IS your lifestyle."},
+  {id:4,n:"Seasonal Mastery",wks:"Wks 13–16",a:[1,2,3,4,5],c:"#38bdf8",rgb:"56,189,248", f:"Rotate with Karnataka seasons",            m:"Your kitchen reflects the season. Body too."},
+  {id:5,n:"Lifestyle Design",wks:"Wks 17–20",a:[1,2,3,4,5],c:"#c084fc",rgb:"192,132,252",f:"Batch prep + family integration",           m:"No reminders needed. Instinctive now."},
+  {id:6,n:"Champion",       wks:"Wks 21–24",a:[1,2,3,4,5], c:"#d4841a",rgb:"212,132,26", f:"Measure your transformation",              m:"You are a coach to others now."},
+];
+const ALARMS=[
+  {e:"☀️",n:"Morning Boost",  t:"6:00 AM", c:"#f59e0b",rgb:"245,158,11"},
+  {e:"🌿",n:"Green Power",    t:"10:30 AM",c:"#22c55e",rgb:"34,197,94"},
+  {e:"🥗",n:"Rainbow Salad",  t:"1:00 PM", c:"#f87171",rgb:"248,113,113"},
+  {e:"🍎",n:"Afternoon Fruit",t:"4:00 PM", c:"#fb923c",rgb:"251,146,60"},
+  {e:"🫘",n:"Dinner Greens",  t:"7:30 PM", c:"#c084fc",rgb:"192,132,252"},
+];
+
+/* ── REGISTER ── */
+function Register({onDone}){
+  const [f,setF]=useState({name:"",phone:"",email:""});
+  const [err,setErr]=useState(""),  [busy,setBusy]=useState(false);
+  const iS={width:"100%",background:BG,border:`1px solid ${BD}`,borderRadius:10,padding:"12px 14px",color:CR,fontSize:14,outline:"none",marginBottom:9,display:"block"};
+  const submit=async()=>{
+    if(!f.name.trim()||!f.phone.trim()||!f.email.trim()){setErr("All fields required");return;}
+    setBusy(true);
+    const id=uid();
+    const user={id,name:f.name.trim(),phone:f.phone.trim(),email:f.email.trim(),phase:1,joined_at:new Date().toISOString()};
+    await db.saveUser(user);
+    localStorage.setItem('5s_uid',id);
+    onDone(id,f.name.trim(),1);
+    setBusy(false);
+  };
+  return (
+    <div style={{position:"fixed",inset:0,zIndex:900,background:"rgba(0,0,0,.96)",display:"flex",alignItems:"center",justifyContent:"center",padding:18}}>
+      <div className="fade" style={{background:"linear-gradient(145deg,#0d2415,#091508)",border:`1px solid ${ra(GR,".4")}`,borderRadius:22,padding:28,width:"100%",maxWidth:370}}>
+        <div style={{textAlign:"center",marginBottom:20}}>
+          <div style={{fontSize:44}}>🌾</div>
+          <div style={{fontFamily:"'Playfair Display',serif",fontSize:22,fontWeight:700,color:G,marginTop:6}}>Join 5serving</div>
+          <div style={{fontSize:12,color:SG,marginTop:4}}>Your 6-month health transformation starts here</div>
+        </div>
+        <input placeholder="Full name" value={f.name} onChange={e=>setF({...f,name:e.target.value})} style={iS}/>
+        <input placeholder="Phone number" value={f.phone} onChange={e=>setF({...f,phone:e.target.value})} type="tel" style={iS}/>
+        <input placeholder="Email address" value={f.email} onChange={e=>setF({...f,email:e.target.value})} type="email" style={iS}/>
+        {err&&<div style={{fontSize:11,color:"#f87171",marginBottom:8}}>{err}</div>}
+        <div style={{fontSize:10,color:MT,marginBottom:13,lineHeight:1.5}}>📋 Your data is saved securely and shared with your programme administrator at 5serving.com.</div>
+        <button onClick={submit} disabled={busy} style={{width:"100%",background:`linear-gradient(135deg,${G},#a85f0e)`,border:"none",borderRadius:13,padding:14,color:"#fff",fontFamily:"'Playfair Display',serif",fontSize:16,fontWeight:700,cursor:"pointer",opacity:busy?.6:1}}>
+          {busy?"Setting up…":"Begin My Journey 🌿"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ── TODAY ── */
+function Today({ph,checks,toggle}){
+  const [exp,setExp]=useState(null);
+  const done=ph.a.filter(w=>checks[w]).length,tot=ph.a.length,pct=tot?Math.round(done/tot*100):0;
+  return (
+    <div style={{padding:"0 14px 20px"}}>
+      <div style={{textAlign:"center",padding:"18px 0 14px"}}>
+        <div style={{fontSize:11,color:SG,marginBottom:6}}>{fmtDate()}</div>
+        {done===tot&&tot>0?(
+          <div className="fade" style={{background:"linear-gradient(135deg,#0b3318,#0d4020)",border:"1px solid rgba(74,222,128,.3)",borderRadius:16,padding:16}}>
+            <div style={{fontSize:40}}>🎉</div>
+            <div style={{fontFamily:"'Playfair Display',serif",fontSize:20,color:"#4ade80",fontWeight:700,marginTop:4}}>Day Complete!</div>
+            <div style={{fontSize:12,color:"#86efac",marginTop:3}}>All {tot} windows done. Excellent!</div>
+          </div>
+        ):(
+          <div>
+            <div style={{fontFamily:"'Playfair Display',serif",fontSize:44,fontWeight:700,color:CR,lineHeight:1}}>{done}<span style={{fontSize:22,color:MT}}>/{tot}</span></div>
+            <div style={{fontSize:11,color:SG,marginBottom:8}}>windows done today</div>
+            <div style={{background:BD,borderRadius:99,height:6,maxWidth:180,margin:"0 auto"}}>
+              <div style={{background:`linear-gradient(90deg,${G},#f0b84a)`,height:"100%",borderRadius:99,width:pct+"%",transition:"width .5s"}}/>
+            </div>
+          </div>
+        )}
+      </div>
+      <div style={{background:"rgba(255,255,255,.03)",border:`1px solid ${BD}`,borderRadius:10,padding:"8px 12px",marginBottom:12,display:"flex",gap:8,alignItems:"center"}}>
+        <span>👆</span><span style={{fontSize:11,color:SG}}>Tap the <strong style={{color:CR}}>circle</strong> or the <strong style={{color:CR}}>bar below</strong> each window to mark done.</span>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:10}}>
+        {WINDOWS.filter(w=>ph.a.includes(w.id)).map(w=>{
+          const ck=!!checks[w.id],open=exp===w.id;
+          return (
+            <div key={w.id} style={{background:ck?ra(w.rgb,".08"):CD,border:`1px solid ${ck?w.c:BD}`,borderRadius:16,overflow:"hidden",transition:"all .3s",boxShadow:ck?`0 2px 18px ${ra(w.rgb,".15")}`:"none"}}>
+              <div style={{padding:"12px 14px",display:"flex",alignItems:"center",gap:10}}>
+                <button onClick={()=>toggle(w.id)} style={{width:44,height:44,borderRadius:"50%",border:`2px solid ${ck?w.c:BD}`,background:ck?w.c:"transparent",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0,transition:"all .25s",fontSize:ck?18:21}}>
+                  {ck?<span style={{color:"#000",fontWeight:700,fontSize:18}}>✓</span>:w.e}
+                </button>
+                <div style={{flex:1,minWidth:0,cursor:"pointer"}} onClick={()=>setExp(open?null:w.id)}>
+                  <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:2}}>
+                    <span style={{fontWeight:700,fontSize:14,color:ck?w.c:CR}}>{w.n}</span>
+                    {ck&&<span style={{fontSize:9,color:w.c,background:ra(w.rgb,".15"),padding:"1px 6px",borderRadius:8,fontWeight:700}}>DONE ✓</span>}
+                  </div>
+                  <div style={{fontSize:10,color:SG}}>{w.nu}</div>
+                  <div style={{fontSize:11,color:MT,marginTop:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{w.food}</div>
+                </div>
+                <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4,flexShrink:0}}>
+                  <span style={{background:"rgba(255,255,255,.05)",color:w.c,fontSize:10,padding:"2px 8px",borderRadius:10,fontWeight:700}}>{w.t}</span>
+                  <span style={{fontSize:10,color:MT,cursor:"pointer"}} onClick={()=>setExp(open?null:w.id)}>{open?"▲":"▼"}</span>
+                </div>
+              </div>
+              <button onClick={()=>toggle(w.id)} style={{width:"100%",padding:"8px 0",background:ck?ra(w.rgb,".1"):"rgba(255,255,255,.03)",border:"none",borderTop:`1px solid ${BD}`,color:ck?w.c:SG,fontWeight:700,fontSize:12,cursor:"pointer",transition:"all .2s"}}>
+                {ck?"✓  Completed — tap to undo":"Tap here to mark as done  ✓"}
+              </button>
+              {open&&(
+                <div className="fade" style={{borderTop:`1px solid ${BD}`,padding:"13px 14px",background:BG}}>
+                  <div style={{fontSize:12,color:CR,opacity:.75,lineHeight:1.5,marginBottom:10,padding:"8px 11px",background:"rgba(255,255,255,.04)",borderRadius:8}}>💡 {w.why}</div>
+                  <div style={{fontSize:10,color:SG,fontWeight:700,letterSpacing:.8,marginBottom:7}}>QUICK RECIPES</div>
+                  {w.recipes.map((r,i)=>(
+                    <div key={i} style={{display:"flex",gap:7,marginBottom:5}}>
+                      <span style={{color:G,fontWeight:700,flexShrink:0}}>→</span>
+                      <span style={{fontSize:11,color:CR,opacity:.8,lineHeight:1.5}}>{r}</span>
+                    </div>
+                  ))}
+                  <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:10}}>
+                    {w.items.map(x=><span key={x} style={{background:ra(w.rgb,".12"),color:w.c,border:`1px solid ${ra(w.rgb,".3")}`,borderRadius:20,padding:"3px 10px",fontSize:10,fontWeight:700}}>{x}</span>)}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {WINDOWS.filter(w=>!ph.a.includes(w.id)).map(w=>(
+          <div key={w.id} style={{...card(),padding:"10px 14px",display:"flex",gap:9,alignItems:"center",opacity:.35,marginBottom:6}}>
+            <span>{w.e}</span><div><div style={{fontSize:12,color:SG}}>{w.n}</div><div style={{fontSize:9,color:MT}}>{w.t} · Phase {w.ph}</div></div>
+          </div>
+        ))}
+      </div>
+      <div style={{marginTop:14,background:ra(GR,".07"),border:`1px solid ${ra(GR,".2")}`,borderRadius:12,padding:"12px 14px"}}>
+        <div style={{fontSize:9,color:G,fontWeight:700,letterSpacing:1.2,marginBottom:4}}>PHASE {ph.id} MILESTONE</div>
+        <div style={{fontSize:12,color:CR,opacity:.75,lineHeight:1.5}}>{ph.m}</div>
+      </div>
+    </div>
+  );
+}
+
+/* ── HEALTH ── */
+function Health({userId}){
+  const [entries,setEntries]=useState([]);
+  const [form,setForm]=useState({energy:5,sleep:5,skin:5,mood:5,notes:""});
+  const [saved,setSaved]=useState(false);
+  useEffect(()=>{db.getHealthEntries(userId).then(setEntries);},[userId]);
+  const save=async()=>{
+    const entry={date:tk(),user_id:userId,energy:form.energy,sleep:form.sleep,skin:form.skin,mood:form.mood,notes:form.notes};
+    const upd=await db.saveHealthEntry(userId,entry);
+    setEntries(upd);setSaved(true);setTimeout(()=>setSaved(false),2000);
+  };
+  return (
+    <div style={{padding:14}}>
+      <div style={{...card(),padding:15,marginBottom:13}}>
+        <div style={{fontFamily:"'Playfair Display',serif",fontSize:16,fontWeight:700,color:CR,marginBottom:3}}>Today's Health Check-in</div>
+        <div style={{fontSize:11,color:SG,marginBottom:13}}>Rate yourself 1–10 and note any changes you notice.</div>
+        {[["energy","⚡ Energy"],["sleep","😴 Sleep Quality"],["skin","✨ Skin Condition"],["mood","🧠 Mood & Focus"]].map(([k,lb])=>(
+          <div key={k} style={{marginBottom:11}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+              <span style={{fontSize:12,color:CR,opacity:.85}}>{lb}</span>
+              <span style={{fontSize:14,fontWeight:700,color:G}}>{form[k]}/10</span>
+            </div>
+            <input type="range" min={1} max={10} value={form[k]} onChange={e=>setForm({...form,[k]:+e.target.value})}/>
+          </div>
+        ))}
+        <textarea value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="How are you feeling? Any improvements in energy, digestion, skin or mood?" style={{width:"100%",background:BG,border:`1px solid ${BD}`,borderRadius:9,padding:"9px 12px",color:CR,resize:"none",height:72,outline:"none",marginBottom:9,fontSize:12}}/>
+        <button onClick={save} style={{width:"100%",background:saved?"#166534":`linear-gradient(135deg,${G},#a85f0e)`,border:"none",borderRadius:11,padding:"11px",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",transition:"background .3s"}}>{saved?"✓ Saved!":"Save Today's Check-in"}</button>
+      </div>
+      <div style={{fontSize:11,color:SG,fontWeight:700,letterSpacing:.8,marginBottom:9}}>RECENT ENTRIES</div>
+      {entries.length===0&&<div style={{color:MT,fontSize:12,textAlign:"center",padding:18,...card()}}>No entries yet. Save your first check-in above!</div>}
+      {entries.slice(0,7).map(e=>(
+        <div key={e.date} style={{...card(),padding:"11px 13px",marginBottom:8}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:e.notes?5:0}}>
+            <span style={{fontSize:12,fontWeight:700,color:CR}}>{e.date}</span>
+            <div style={{display:"flex",gap:9}}>
+              {[["⚡",e.energy],["😴",e.sleep],["✨",e.skin],["🧠",e.mood]].map(([em,v])=>(
+                <span key={em} style={{fontSize:11,color:SG}}>{em}<strong style={{color:CR,marginLeft:2}}>{v}</strong></span>
+              ))}
+            </div>
+          </div>
+          {e.notes&&<div style={{fontSize:11,color:SG,lineHeight:1.5,marginTop:4}}>{e.notes}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ── ALARMS ── */
+function Alarms(){
+  return (
+    <div style={{padding:14}}>
+      <div style={{background:ra(GR,".08"),border:`1px solid ${ra(GR,".3")}`,borderRadius:14,padding:14,marginBottom:14}}>
+        <div style={{fontSize:15,fontWeight:700,color:G,marginBottom:4}}>🔔 5 Daily Alarms — Active</div>
+        <div style={{fontSize:12,color:SG,lineHeight:1.5}}>Vibration alerts set for every window, every day.</div>
+      </div>
+      {ALARMS.map(a=>(
+        <div key={a.t} style={{...card(),padding:"13px 14px",marginBottom:8,display:"flex",alignItems:"center",gap:12}}>
+          <div style={{width:42,height:42,borderRadius:"50%",background:ra(a.rgb,".15"),border:`2px solid ${a.c}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{a.e}</div>
+          <div style={{flex:1}}><div style={{fontWeight:700,fontSize:13,color:CR}}>{a.n}</div></div>
+          <div style={{textAlign:"right"}}><div style={{fontFamily:"'Playfair Display',serif",fontSize:15,fontWeight:700,color:a.c}}>{a.t}</div><div style={{fontSize:9,color:MT,marginTop:2}}>Daily 🔔</div></div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ── ADMIN ── */
+function Admin(){
+  const [pass,setPass]=useState(""),  [auth,setAuth]=useState(false), [users,setUsers]=useState([]), [latestH,setLatestH]=useState({});
+  const login=async()=>{
+    if(pass!==APASS){alert("Incorrect password");return;}
+    setAuth(true);
+    const us=await db.getAllUsers();
+    setUsers(us);
+    const hMap={};
+    await Promise.all(us.map(async u=>{hMap[u.id]=await db.getLatestHealth(u.id);}));
+    setLatestH(hMap);
+  };
+  if(!auth) return (
+    <div style={{padding:18}}>
+      <div style={{...card(),padding:22,textAlign:"center"}}>
+        <div style={{fontSize:32,marginBottom:10}}>🔐</div>
+        <div style={{fontFamily:"'Playfair Display',serif",fontSize:17,fontWeight:700,color:CR,marginBottom:14}}>Admin Access</div>
+        <input value={pass} onChange={e=>setPass(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")login();}} type="password" placeholder="Enter admin password"
+          style={{width:"100%",background:BG,border:`1px solid ${BD}`,borderRadius:10,padding:"11px 13px",color:CR,fontSize:14,outline:"none",marginBottom:10}}/>
+        <button onClick={login} style={{width:"100%",background:`linear-gradient(135deg,${G},#a85f0e)`,border:"none",borderRadius:11,padding:"11px",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer"}}>Login</button>
+      </div>
+    </div>
+  );
+  const mo=new Date().toISOString().slice(0,7);
+  const phCount={};
+  users.forEach(u=>{const p=u.phase||1;phCount[p]=(phCount[p]||0)+1;});
+  return (
+    <div style={{padding:13}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:9,marginBottom:14}}>
+        {[{l:"Total Users",v:users.length},{l:"This Month",v:users.filter(u=>u.joined_at&&u.joined_at.startsWith(mo)).length},{l:"With Health Data",v:Object.values(latestH).filter(Boolean).length}].map(s=>(
+          <div key={s.l} style={{...card(),padding:"11px 8px",textAlign:"center"}}>
+            <div style={{fontFamily:"'Playfair Display',serif",fontSize:22,fontWeight:700,color:G}}>{s.v}</div>
+            <div style={{fontSize:10,color:SG,marginTop:2}}>{s.l}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{...card(),padding:13,marginBottom:13}}>
+        <div style={{fontSize:12,fontWeight:700,color:CR,marginBottom:9}}>Phase Distribution</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:7}}>
+          {PHASES.map(p=>(
+            <div key={p.id} style={{background:ra(p.rgb,".1"),border:`1px solid ${ra(p.rgb,".3")}`,borderRadius:10,padding:"6px 11px",textAlign:"center"}}>
+              <div style={{fontSize:13,fontWeight:700,color:p.c}}>{phCount[p.id]||0}</div>
+              <div style={{fontSize:9,color:MT,marginTop:1}}>Ph {p.id}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{fontSize:11,color:SG,fontWeight:700,letterSpacing:.8,marginBottom:9}}>ALL USERS ({users.length})</div>
+      {users.length===0&&<div style={{...card(),color:MT,fontSize:12,textAlign:"center",padding:18}}>No users yet.</div>}
+      {users.map(u=>{
+        const pp=PHASES[(u.phase||1)-1], lh=latestH[u.id];
+        return (
+          <div key={u.id} style={{...card(),padding:"12px 13px",marginBottom:8}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+              <div>
+                <div style={{fontWeight:700,fontSize:13,color:CR}}>{u.name}</div>
+                <div style={{fontSize:11,color:SG,marginTop:1}}>{u.phone}</div>
+                <div style={{fontSize:11,color:MT}}>{u.email}</div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <span style={{fontSize:10,color:pp.c,background:ra(pp.rgb,".15"),border:`1px solid ${ra(pp.rgb,".3")}`,padding:"2px 8px",borderRadius:9,fontWeight:700}}>Phase {u.phase||1}</span>
+                <div style={{fontSize:9,color:MT,marginTop:3}}>{u.joined_at?(u.joined_at.slice(0,10)):"—"}</div>
+              </div>
+            </div>
+            {lh&&(
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 9px",background:BG,borderRadius:8}}>
+                <span style={{fontSize:10,color:MT}}>Last: <span style={{color:SG}}>{lh.date}</span></span>
+                <div style={{display:"flex",gap:8}}>
+                  {[["⚡",lh.energy],["😴",lh.sleep],["✨",lh.skin],["🧠",lh.mood]].map(([em,v])=>(
+                    <span key={em} style={{fontSize:10,color:SG}}>{em}<strong style={{color:CR}}>{v}</strong></span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {!lh&&<div style={{fontSize:10,color:MT,marginTop:2}}>No health entries yet</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ── COACH ── */
+function Coach({userName,phase,ph,streak}){
+  const [msgs,setMsgs]=useState([{r:"a",t:"🌿 Namaste! I am your personal 5serving coach. Ask me about foods, windows, recipes, or how to stay motivated on your journey!"}]);
+  const [input,setInput]=useState(""),  [loading,setLoading]=useState(false);
+  const chatRef=useRef();
+  const tips=["What should I eat for Window 2 today?","I skipped yesterday — what now?","Best Moringa recipe for beginners?","How to batch prep on Sundays?"];
+  const send=async()=>{
+    if(!input.trim()||loading)return;
+    const txt=input.trim();setInput("");
+    const nm=[...msgs,{r:"u",t:txt}];setMsgs(nm);setLoading(true);
+    try{
+      const res=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          system:`You are a warm 5serving nutrition coach. User: ${userName}, Phase ${phase} (${ph.n}): ${ph.f}. Streak: ${streak} days. 5 windows: W1 6AM Amla+fruit (VitC,Iron), W2 10:30AM Moringa/Spinach (Iron,Folate), W3 1PM Carrot-beet salad (Calcium,Mg), W4 4PM Seasonal fruit (Potassium), W5 7:30PM Methi/Curry leaves+onion+garlic (Zinc,Gut). Be warm, concise (2-3 sentences), Indian food names.`,
+          messages:nm.map(m=>({role:m.r==="u"?"user":"assistant",content:m.t}))
+        })});
+      const data=await res.json();
+      setMsgs([...nm,{r:"a",t:data.content&&data.content[0]?data.content[0].text:"Please try again! 🌿"}]);
+    }catch{setMsgs([...nm,{r:"a",t:"Network error. Please try again! 🌿"}]);}
+    setLoading(false);
+    setTimeout(()=>{if(chatRef.current)chatRef.current.scrollTop=99999;},100);
+  };
+  return (
+    <div style={{display:"flex",flexDirection:"column",height:"calc(100vh - 160px)"}}>
+      <div ref={chatRef} style={{flex:1,overflowY:"auto",padding:"13px 14px 9px"}}>
+        {msgs.map((m,i)=>{
+          const u=m.r==="u";
+          return (
+            <div key={i} style={{display:"flex",gap:8,marginBottom:12,justifyContent:u?"flex-end":"flex-start"}}>
+              {!u&&<div style={{width:30,height:30,borderRadius:"50%",background:ra(GR,".18"),border:`1px solid ${ra(GR,".35")}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0}}>🌿</div>}
+              <div style={{maxWidth:"78%",background:u?ra(GR,".14"):CD,border:`1px solid ${ra(GR,u?".3":".1")}`,borderRadius:u?"16px 16px 4px 16px":"16px 16px 16px 4px",padding:"10px 13px"}}>
+                <div style={{fontSize:13,color:CR,opacity:.9,lineHeight:1.6}}>{m.t}</div>
+              </div>
+            </div>
+          );
+        })}
+        {loading&&(
+          <div style={{display:"flex",gap:8}}>
+            <div style={{width:30,height:30,borderRadius:"50%",background:ra(GR,".18"),border:`1px solid ${ra(GR,".35")}`,display:"flex",alignItems:"center",justifyContent:"center"}}>🌿</div>
+            <div style={{...card(),padding:"12px 15px",borderRadius:"16px 16px 16px 4px"}}>
+              <div style={{display:"flex",gap:4}}>{[0,1,2].map(n=><div key={n} style={{width:6,height:6,borderRadius:"50%",background:SG,animation:`pulse 1.2s ease-in-out ${n*.2}s infinite`}}/>)}</div>
+            </div>
+          </div>
+        )}
+      </div>
+      {msgs.length<=2&&<div style={{padding:"0 14px 9px",overflowX:"auto",whiteSpace:"nowrap"}}>{tips.map(t=><button key={t} onClick={()=>setInput(t)} style={{display:"inline-block",marginRight:7,background:CD,border:`1px solid ${BD}`,borderRadius:18,padding:"6px 13px",color:SG,fontSize:11,cursor:"pointer",fontWeight:600,whiteSpace:"nowrap"}}>{t}</button>)}</div>}
+      <div style={{padding:"8px 14px 14px",borderTop:`1px solid ${BD}`,background:"#091508",display:"flex",gap:8}}>
+        <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")send();}} placeholder="Ask your 5serving coach…"
+          style={{flex:1,background:CD,border:`1px solid ${BD}`,borderRadius:22,padding:"10px 15px",color:CR,fontSize:13,outline:"none"}}/>
+        <button onClick={send} disabled={loading||!input.trim()} style={{width:42,height:42,borderRadius:"50%",background:loading||!input.trim()?BD:`linear-gradient(135deg,${G},#a85f0e)`,border:"none",cursor:loading||!input.trim()?"not-allowed":"pointer",fontSize:17,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+          {loading?"⏳":"➤"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ── MAIN APP ── */
+function App(){
+  const [tab,setTab]=useState("today");
+  const [userId,setUserId]=useState(null);
+  const [userName,setUserName]=useState("");
+  const [phase,setPhaseState]=useState(1);
+  const [checks,setChecks]=useState({});
+  const [hist,setHist]=useState({});
+  const [streak,setStreak]=useState(0);
+  const [ready,setReady]=useState(false);
+  const [adminOpen,setAdminOpen]=useState(false);
+  const [phaseModal,setPhaseModal]=useState(false);
+  const ph=PHASES[phase-1];
+
+  useEffect(()=>{
+    if('serviceWorker' in navigator){
+      navigator.serviceWorker.register('/sw.js').catch(()=>{});
+    }
+    (async()=>{
+      const storedId=localStorage.getItem('5s_uid');
+      if(storedId){
+        setUserId(storedId);
+        const user=await db.getUser(storedId);
+        if(user){setUserName(user.name);setPhaseState(user.phase||1);}
+        const todayChecks=await db.getChecks(storedId,tk());
+        setChecks(todayChecks);
+        const h=await db.getHistory(storedId);
+        setHist(h);
+      }
+      setReady(true);
+    })();
+  },[]);
+
+  useEffect(()=>{
+    if(!userId)return;
+    let s=0;const now=new Date();
+    for(let i=0;i<183;i++){
+      const d=new Date(now);d.setDate(d.getDate()-i);
+      const k=d.toISOString().split("T")[0];
+      const dc=i===0?checks:(hist[k]||{});
+      if(ph.a.every(w=>dc[w])){s++;}else if(i>0){break;}
+    }
+    setStreak(s);
+  },[checks,hist,phase,userId]);
+
+  const toggle=async(id)=>{
+    const nc={...checks,[id]:!checks[id]};
+    setChecks(nc);
+    const nh={...hist,[tk()]:nc};setHist(nh);
+    await db.saveChecks(userId,tk(),nc);
+  };
+
+  const changePhase=async(p)=>{
+    setPhaseState(p);setPhaseModal(false);
+    const user=await db.getUser(userId);
+    if(user){await db.saveUser({...user,phase:p});}
+  };
+
+  const onReg=(id,name,p)=>{setUserId(id);setUserName(name);setPhaseState(p);};
+
+  if(!ready)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",background:BG}}><div style={{fontSize:52}}>🌾</div><div style={{color:SG,marginTop:12,fontSize:14}}>Loading your journey…</div></div>);
+  if(!userId)return <Register onDone={onReg}/>;
+
+  const firstName=userName.split(" ")[0];
+  const TABS=[["today","🌅","Today"],["health","💚","Health"],["alarms","🔔","Alarms"],["coach","🌿","Coach"]];
+
+  return (
+    <div style={{fontFamily:"'Nunito',sans-serif",background:BG,minHeight:"100vh",maxWidth:430,margin:"0 auto",color:CR,paddingBottom:72}}>
+
+      {/* Admin overlay */}
+      {adminOpen&&(
+        <div style={{position:"fixed",inset:0,zIndex:700,background:BG,overflowY:"auto",paddingBottom:20}}>
+          <div style={{padding:"12px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:`1px solid ${BD}`,position:"sticky",top:0,background:BG,zIndex:10}}>
+            <div style={{fontFamily:"'Playfair Display',serif",fontSize:16,fontWeight:700,color:G}}>⚙️ Admin Dashboard</div>
+            <button onClick={()=>setAdminOpen(false)} style={{...card(),padding:"5px 11px",color:SG,fontSize:12,cursor:"pointer",fontWeight:600,border:`1px solid ${BD}`}}>✕ Close</button>
+          </div>
+          <Admin/>
+        </div>
+      )}
+
+      {/* Phase modal */}
+      {phaseModal&&(
+        <div style={{position:"fixed",inset:0,zIndex:800,background:"rgba(0,0,0,.9)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div className="fade" style={{...card(),padding:20,width:"100%",maxWidth:360}}>
+            <div style={{fontFamily:"'Playfair Display',serif",fontSize:17,fontWeight:700,color:CR,marginBottom:14}}>Change Phase</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7}}>
+              {PHASES.map(p=>(
+                <button key={p.id} onClick={()=>changePhase(p.id)} style={{background:phase===p.id?ra(p.rgb,".15"):BG,border:`1px solid ${phase===p.id?p.c:BD}`,borderRadius:11,padding:"10px 9px",cursor:"pointer",textAlign:"left"}}>
+                  <div style={{fontSize:11,fontWeight:700,color:p.c}}>Phase {p.id}: {p.n}</div>
+                  <div style={{fontSize:10,color:MT,marginTop:2}}>{p.wks}</div>
+                </button>
+              ))}
+            </div>
+            <button onClick={()=>setPhaseModal(false)} style={{width:"100%",marginTop:12,background:"rgba(255,255,255,.05)",border:`1px solid ${BD}`,borderRadius:10,padding:"9px",color:SG,fontSize:13,cursor:"pointer",fontWeight:600}}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Header */}
+      <div style={{background:"linear-gradient(135deg,#091a0d,#0f2815)",borderBottom:`1px solid ${BD}`,padding:"11px 15px",display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,zIndex:100,boxShadow:"0 2px 20px rgba(0,0,0,.4)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontSize:22,cursor:"pointer"}} onClick={()=>setPhaseModal(true)}>🌾</span>
+          <div>
+            <div style={{fontFamily:"'Playfair Display',serif",fontSize:17,fontWeight:700,color:G,lineHeight:1}}>5serving</div>
+            <div style={{fontSize:9,color:SG,marginTop:1,cursor:"pointer"}} onClick={()=>setPhaseModal(true)}>Hi {firstName} · Phase {phase}: {ph.n} ✏️</div>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:7,alignItems:"center"}}>
+          <div style={{background:ra(GR,".12"),border:`1px solid ${ra(GR,".3")}`,borderRadius:18,padding:"5px 11px",display:"flex",alignItems:"center",gap:4}}>
+            <span>🔥</span>
+            <span style={{fontFamily:"'Playfair Display',serif",fontSize:18,fontWeight:700,color:G}}>{streak}</span>
+            <span style={{fontSize:9,color:SG}}>days</span>
+          </div>
+          <button onClick={()=>setAdminOpen(true)} style={{background:"rgba(255,255,255,.05)",border:`1px solid ${BD}`,borderRadius:8,padding:"5px 9px",color:MT,fontSize:14,cursor:"pointer",lineHeight:1}} title="Admin">⚙️</button>
+        </div>
+      </div>
+
+      {/* Content */}
+      {tab==="today" &&<Today ph={ph} checks={checks} toggle={toggle}/>}
+      {tab==="health"&&<Health userId={userId}/>}
+      {tab==="alarms"&&<Alarms/>}
+      {tab==="coach" &&<Coach userName={userName} phase={phase} ph={ph} streak={streak}/>}
+
+      {/* Nav */}
+      <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,background:"#060f08",borderTop:`1px solid ${BD}`,display:"flex",zIndex:200}}>
+        {TABS.map(([id,em,lb])=>(
+          <button key={id} onClick={()=>setTab(id)} style={{flex:1,padding:"8px 0",background:"none",border:"none",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2,borderTop:`2px solid ${tab===id?G:"transparent"}`,transition:"all .15s"}}>
+            <span style={{fontSize:19}}>{em}</span>
+            <span style={{fontSize:9,fontWeight:700,color:tab===id?G:MT,letterSpacing:.3}}>{lb}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+</script>
+</body>
+</html>

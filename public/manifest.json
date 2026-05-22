@@ -1,0 +1,40 @@
+{
+  "name": "5serving — Daily Nutrition Tracker",
+  "short_name": "5serving",
+  "description": "Track your 5 daily nutrition windows. 6-month healthy eating challenge.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#060f08",
+  "theme_color": "#060f08",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Today's Windows",
+      "short_name": "Today",
+      "url": "/?tab=today",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Health Check-in",
+      "short_name": "Health",
+      "url": "/?tab=health",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    }
+  ],
+  "categories": ["health", "lifestyle", "food"],
+  "lang": "en-IN"
+}
